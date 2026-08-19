@@ -16,6 +16,7 @@ import math
 import sqlite3
 import sys
 
+import paths
 from elo import EloEngine
 
 TEST_FROM = 20240101
@@ -63,4 +64,4 @@ def run(db_path: str) -> None:
 
 
 if __name__ == "__main__":
-    run(sys.argv[1] if len(sys.argv) > 1 else "/home/claude/tennis-agent/data/tennis.db")
+    run(sys.argv[1] if len(sys.argv) > 1 else paths.DB)

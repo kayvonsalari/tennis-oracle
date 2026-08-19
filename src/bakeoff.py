@@ -18,10 +18,11 @@ import sqlite3
 import sys
 import time
 
+import paths
 from elo import EloEngine
 from glicko2 import Glicko2Engine
 
-DB = "/home/claude/tennis-agent/data/tennis.db"
+DB = paths.DB
 TEST_FROM = 20240101
 
 

@@ -1,0 +1,10 @@
+# Built artefacts and third-party data — never committed.
+# tennis.db is rebuilt by src/load_data.py; the tennis-data.co.uk odds
+# workbooks are downloaded by src/feed_tennisdata.py (licence caution).
+data/
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/

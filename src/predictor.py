@@ -15,8 +15,7 @@ import sqlite3 as _sq
 
 from glicko2 import Glicko2Engine
 from evidence import find_player, gather
-
-DB_PATH = "/home/claude/tennis-agent/data/tennis.db"
+from paths import DB as DB_PATH
 
 _engines: dict = {}
 
