@@ -13,6 +13,8 @@ import os
 import sqlite3
 import sys
 
+import paths
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS matches (
     match_key      TEXT PRIMARY KEY,   -- tourney_id + match_num
@@ -73,6 +75,7 @@ def load(data_dir: str, db_path: str, min_year: int = 1978,
          tour_tag: str = "ATP", id_offset: int = 0) -> None:
     """min_year 1978: earliest era with mostly-complete surface data;
     Elo needs long warm-up anyway."""
+    os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
     con = sqlite3.connect(db_path)
     con.executescript(SCHEMA)
 
@@ -122,8 +125,24 @@ def load(data_dir: str, db_path: str, min_year: int = 1978,
     con.close()
 
 
+USAGE = """usage: python src/load_data.py [ATP_CSV_DIR] [WTA_CSV_DIR]
+
+The CSVs are not in this repo. Jeff Sackmann's originals were removed
+from GitHub in Aug 2026; use the surviving community forks:
+
+  curl -L -o atp.zip https://codeload.github.com/Kadantte/tennis_atp/zip/refs/heads/master
+  curl -L -o wta.zip https://codeload.github.com/chestnutforty/tennis_wta/zip/refs/heads/master
+  unzip atp.zip -d data/ && unzip wta.zip -d data/
+  python src/load_data.py data/tennis_atp-master data/tennis_wta-master
+"""
+
 if __name__ == "__main__":
-    db_path = "/home/claude/tennis-agent/data/tennis.db"
-    load("/tmp/atp_data/tennis_atp-master", db_path, tour_tag="ATP")
-    load("/tmp/wta_data/tennis_wta-master", db_path, tour_tag="WTA",
-         id_offset=100_000_000)
+    atp_dir = sys.argv[1] if len(sys.argv) > 1 else os.path.join(paths.DATA_DIR, "tennis_atp-master")
+    wta_dir = sys.argv[2] if len(sys.argv) > 2 else os.path.join(paths.DATA_DIR, "tennis_wta-master")
+    missing = [d for d in (atp_dir, wta_dir) if not os.path.isdir(d)]
+    if missing:
+        print("missing CSV directory: " + ", ".join(missing) + "\n")
+        print(USAGE)
+        sys.exit(2)
+    load(atp_dir, paths.DB, tour_tag="ATP")
+    load(wta_dir, paths.DB, tour_tag="WTA", id_offset=100_000_000)

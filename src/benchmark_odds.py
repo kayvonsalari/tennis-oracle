@@ -24,18 +24,15 @@ from collections import defaultdict
 
 import pandas as pd
 
+import paths
 from elo import EloEngine
 from glicko2 import Glicko2Engine
 
-DB = "/home/claude/tennis-agent/data/tennis.db"
-FILES = {
-    "ATP": ["/mnt/user-data/uploads/2024.xlsx",
-            "/mnt/user-data/uploads/2025.xlsx",
-            "/mnt/user-data/uploads/2026.xlsx"],
-    "WTA": ["/mnt/user-data/uploads/2024_WTA.xlsx",
-            "/mnt/user-data/uploads/2025_WTA.xlsx",
-            "/mnt/user-data/uploads/2026_WTA.xlsx"],
-}
+DB = paths.DB
+# data/odds/{year}.xlsx (ATP) and data/odds/{year}_WTA.xlsx (WTA).
+# Not committed: download from tennis-data.co.uk/alldata.php, or let
+# src/feed_tennisdata.py fetch them.
+FILES = {tour: paths.odds_files(tour, existing_only=False) for tour in ("ATP", "WTA")}
 TEST_FROM = 20240101
 TOP_LEVELS = ("G", "M", "A", "F", "O", "P", "PM", "I", "W")
 
