@@ -1,0 +1,144 @@
+"""Benchmark vs the bookmakers, both tours.
+
+tennis-data.co.uk gives one row per completed tour match with closing
+odds (Pinnacle PSW/PSL preferred, market average as fallback). We:
+
+1. Walk forward through the Sackmann DB, storing OUR pre-match
+   probability for every 2024+ tour match (rating uses only earlier
+   matches, as always).
+2. Convert bookmaker odds to a fair probability (strip the margin:
+   pW = (1/oW) / (1/oW + 1/oL)).
+3. Join the two datasets on (winner surname+initial, loser
+   surname+initial, date within 16 days) since tennis-data uses exact
+   match dates and Sackmann uses tournament start dates.
+4. Score both on the SAME matched matches. No cherry-picking.
+"""
+
+from __future__ import annotations
+
+import math
+import re
+import sqlite3
+import unicodedata
+from collections import defaultdict
+
+import pandas as pd
+
+from elo import EloEngine
+from glicko2 import Glicko2Engine
+
+DB = "/home/claude/tennis-agent/data/tennis.db"
+FILES = {
+    "ATP": ["/mnt/user-data/uploads/2024.xlsx",
+            "/mnt/user-data/uploads/2025.xlsx",
+            "/mnt/user-data/uploads/2026.xlsx"],
+    "WTA": ["/mnt/user-data/uploads/2024_WTA.xlsx",
+            "/mnt/user-data/uploads/2025_WTA.xlsx",
+            "/mnt/user-data/uploads/2026_WTA.xlsx"],
+}
+TEST_FROM = 20240101
+TOP_LEVELS = ("G", "M", "A", "F", "O", "P", "PM", "I", "W")
+
+
+def strip_accents(s: str) -> str:
+    return "".join(c for c in unicodedata.normalize("NFD", s)
+                   if unicodedata.category(c) != "Mn")
+
+
+def key_td(name: str) -> tuple[str, str]:
+    """tennis-data style: 'De Minaur A.' -> ('de minaur', 'a')"""
+    toks = strip_accents(str(name)).replace(".", "").strip().lower().split()
+    if len(toks) >= 2 and len(toks[-1]) <= 2:
+        return " ".join(toks[:-1]), toks[-1][0]
+    return " ".join(toks), ""
+
+
+def key_sack(name: str) -> tuple[str, str]:
+    """Sackmann style: 'Alex De Minaur' -> ('de minaur', 'a')"""
+    toks = strip_accents(str(name)).strip().lower().split()
+    if len(toks) >= 2:
+        return " ".join(toks[1:]), toks[0][0]
+    return " ".join(toks), ""
+
+
+def our_predictions(tour: str) -> dict:
+    """Walk forward; store P(winner) for 2024+ top-level matches."""
+    con = sqlite3.connect(DB)
+    rows = con.execute(
+        """SELECT tourney_date, surface, winner_id, loser_id,
+                  winner_name, loser_name, tourney_level
+           FROM matches WHERE winner_id IS NOT NULL AND tour=?
+           ORDER BY tourney_date, tourney_id, match_num""", (tour,)).fetchall()
+    con.close()
+    engines = {"elo": EloEngine(), "glicko": Glicko2Engine()}
+    preds = defaultdict(list)  # (wkey, lkey) -> [(date, p_elo, p_glicko)]
+    for date, surface, wid, lid, wn, ln, lvl in rows:
+        if lvl == "D":
+            continue
+        if lvl in TOP_LEVELS and date >= TEST_FROM:
+            pe = engines["elo"].predict(wid, lid, surface or "")
+            pg = engines["glicko"].predict(wid, lid, surface or "")
+            preds[(key_sack(wn), key_sack(ln))].append((date, pe, pg))
+        for e in engines.values():
+            e.update(wid, lid, surface or "", date)
+    return preds
+
+
+def date_int(ts) -> int:
+    return ts.year * 10000 + ts.month * 100 + ts.day
+
+
+def days_apart(a: int, b: int) -> int:
+    from datetime import date
+    da = date(a // 10000, (a // 100) % 100, a % 100)
+    db = date(b // 10000, (b // 100) % 100, b % 100)
+    return abs((da - db).days)
+
+
+def run(tour: str) -> None:
+    preds = our_predictions(tour)
+    frames = [pd.read_excel(f) for f in FILES[tour]]
+    td = pd.concat(frames, ignore_index=True)
+
+    matched = 0
+    used = set()
+    m = {"book": [], "elo": [], "glicko": []}
+    for _, r in td.iterrows():
+        ow, ol = r.get("PSW"), r.get("PSL")
+        if not (ow and ol and ow == ow and ol == ol):
+            ow, ol = r.get("AvgW"), r.get("AvgL")
+        if not (ow and ol and ow == ow and ol == ol and ow > 1 and ol > 1):
+            continue
+        k = (key_td(r["Winner"]), key_td(r["Loser"]))
+        cands = preds.get(k)
+        if not cands:
+            continue
+        d = date_int(r["Date"])
+        best = None
+        for i, (sd, pe, pg) in enumerate(cands):
+            gap = days_apart(d, sd)
+            if gap <= 16 and (best is None or gap < best[0]) and (k, i) not in used:
+                best = (gap, i, pe, pg)
+        if best is None:
+            continue
+        used.add((k, best[1]))
+        p_book = (1 / ow) / (1 / ow + 1 / ol)  # de-vigged, P(actual winner)
+        m["book"].append(p_book)
+        m["elo"].append(best[2])
+        m["glicko"].append(best[3])
+        matched += 1
+
+    print(f"\n=== {tour}: {matched} matches matched "
+          f"(of {len(td)} tennis-data rows) ===")
+    for name in ("book", "elo", "glicko"):
+        ps = m[name]
+        acc = sum(p > 0.5 for p in ps) / len(ps)
+        ll = sum(-math.log(min(max(p, 1e-9), 1 - 1e-9)) for p in ps) / len(ps)
+        label = {"book": "bookmakers (de-vigged)",
+                 "elo": "our Elo", "glicko": "our Glicko-2"}[name]
+        print(f"  {label:24} acc {acc:.4f}  logloss {ll:.4f}")
+
+
+if __name__ == "__main__":
+    run("ATP")
+    run("WTA")
