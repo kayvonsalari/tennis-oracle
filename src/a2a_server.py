@@ -13,6 +13,7 @@ a prediction, so a request costs nothing.
 from __future__ import annotations
 
 import json
+import os
 import re
 
 from a2a.helpers import new_data_part, new_task_from_user_message, new_text_message
@@ -28,6 +29,7 @@ from a2a.server.tasks import InMemoryTaskStore, TaskUpdater
 from a2a.types import AgentCapabilities, AgentCard, AgentSkill
 from fastapi import FastAPI
 
+from narrator import narrate
 from predictor import predict
 
 # ---------------------------------------------------------------- card
@@ -37,12 +39,15 @@ from a2a.types import AgentInterface
 CARD = AgentCard(
     name="aristos-tennis-oracle",
     description=(
-        "Deterministic ATP and WTA match predictor. Surface-adjusted Glicko-2 "
-        "trained on 1M+ matches (1978-2026). Benchmarked vs bookmakers: "
-        "ATP 65.4% (market 68.2%), WTA 65.8% (market 67.0%). Returns win "
-        "probability, ratings, head-to-head, form, and honest caveats. "
-        "Math judges; no LLM in the verdict path. "
-        "Data: Jeff Sackmann's tennis_atp (CC BY-NC-SA 4.0). Non-commercial."
+        "Deterministic ATP and WTA match predictor covering tour, Challenger "
+        "and ITF levels. Surface-adjusted Glicko-2 over 1M+ matches. "
+        "Measured accuracy (walk-forward, 2024-2026): ATP tour 65.4% vs "
+        "closing odds 67.9%; WTA tour 65.7% vs 67.2%; ATP Challenger 64.4%; "
+        "WTA ITF 70.5-70.8%, where no bookmaker line exists. Rank-based "
+        "baseline is 62.8-64.2%. Returns win probability, ratings with "
+        "uncertainty, head-to-head, form and explicit caveats. Math judges; "
+        "no LLM in the verdict path. Data: Jeff Sackmann's datasets "
+        "(CC BY-NC-SA 4.0) plus tennis-data.co.uk. Non-commercial use only."
     ),
     version="0.1.0",
     supported_interfaces=[
@@ -58,13 +63,17 @@ CARD = AgentCard(
             name="Predict ATP match outcome",
             description=(
                 "Input: '[ATP|WTA] PlayerA vs PlayerB on <surface>' "
-                "(tour defaults to ATP, surface to hard). Output: JSON with "
-                "predicted_winner, win_probability, ratings, evidence, caveats."
+                "(tour defaults to ATP, surface to hard). Lower-tier players "
+                "are supported: accuracy is highest on WTA ITF events. "
+                "Output: JSON with predicted_winner, win_probability, level, "
+                "ratings with uncertainty, evidence and caveats."
             ),
-            tags=["tennis", "prediction", "elo", "sports", "atp"],
+            tags=["tennis", "prediction", "glicko", "elo", "sports",
+                  "atp", "wta", "challenger", "itf"],
             examples=[
                 "Carlos Alcaraz vs Jannik Sinner on clay",
                 "WTA Aryna Sabalenka vs Iga Swiatek on hard",
+                "WTA Lamis Alhussein Abdel Aziz vs Sandra Samir on clay",
             ],
         )
     ],
@@ -114,12 +123,17 @@ class TennisOracleExecutor(AgentExecutor):
             parts=[new_data_part(result)],
             name="prediction",
         )
-        summary = (
-            f"{result['predicted_winner']} to win "
-            f"({result['win_probability']:.0%}) on {result['surface']} "
-            f"({result['tour']}). "
-            f"Method: deterministic surface Elo. Data through {result['data_through']}."
-        )
+        if os.environ.get("NARRATE") == "1":
+            # Prose for humans. The artifact above is unchanged either way,
+            # and the verdict is already fixed: this only rewords it.
+            summary = narrate(result)
+        else:
+            summary = (
+                f"{result['predicted_winner']} to win "
+                f"({result['win_probability']:.0%}) on {result['surface']} "
+                f"({result['tour']}, {result['level']} level). "
+                f"Deterministic Glicko-2. Data through {result['data_through']}."
+            )
         await updater.complete(
             message=new_text_message(
                 summary, task_id=context.task_id, context_id=context.context_id,

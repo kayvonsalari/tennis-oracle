@@ -97,6 +97,42 @@ def serve_hold_pct(con, pid: int, surface: str, since: int) -> float | None:
     return round(100 * won / total, 1) if won and total else None
 
 
+TOP_LEVELS = ("G", "M", "A", "F", "O", "P", "PM", "I", "W")
+CHALLENGER_LEVELS = ("C",)
+
+
+def player_level(con, pid: int, lookback: int = 20) -> str:
+    """Where this player actually competes: tour, challenger, or itf.
+
+    Based on the most common level across their recent matches, not the
+    single latest one, so a qualifier's one tour appearance does not
+    reclassify them.
+    """
+    rows = con.execute(
+        """SELECT tourney_level FROM matches
+           WHERE (winner_id=? OR loser_id=?) AND tourney_level IS NOT NULL
+           ORDER BY tourney_date DESC, tourney_id DESC LIMIT ?""",
+        (pid, pid, lookback)).fetchall()
+    if not rows:
+        return "unknown"
+    counts = {"tour": 0, "challenger": 0, "itf": 0}
+    for (lvl,) in rows:
+        if lvl in TOP_LEVELS:
+            counts["tour"] += 1
+        elif lvl in CHALLENGER_LEVELS:
+            counts["challenger"] += 1
+        else:
+            counts["itf"] += 1
+    return max(counts, key=counts.get)
+
+
+def match_level(con, a: int, b: int) -> str:
+    """Level of a hypothetical meeting: the higher of the two players'."""
+    order = {"tour": 3, "challenger": 2, "itf": 1, "unknown": 0}
+    la, lb = player_level(con, a), player_level(con, b)
+    return la if order[la] >= order[lb] else lb
+
+
 def gather(con, a: int, b: int, surface: str) -> dict:
     """All evidence for the matchup, one call."""
     year_ago = _today_int() - 20000  # ~2 years, integer date arithmetic is fine here

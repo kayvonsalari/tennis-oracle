@@ -19,12 +19,17 @@ from __future__ import annotations
 import math
 import re
 import sqlite3
+import sys
 import unicodedata
 from collections import defaultdict
 
 import pandas as pd
 
+import os as _os
+sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+
 import paths
+from namematch import implied_probability
 from elo import EloEngine
 from glicko2 import Glicko2Engine
 
@@ -92,7 +97,62 @@ def days_apart(a: int, b: int) -> int:
     return abs((da - db).days)
 
 
+def run_from_db(tour: str) -> bool:
+    """Score against odds stored in the DB by the feed importer.
+
+    Returns False if no odds are present, so the caller falls back to
+    reading the xlsx workbooks directly.
+    """
+    con = sqlite3.connect(paths.DB)
+    n = con.execute(
+        "SELECT COUNT(*) FROM matches WHERE tour=? AND odds_winner IS NOT NULL",
+        (tour,)).fetchone()[0]
+    if not n:
+        con.close()
+        return False
+
+    engines = {"elo": EloEngine(), "glicko": Glicko2Engine()}
+    rows = con.execute(
+        """SELECT tourney_date, surface, winner_id, loser_id, tourney_level,
+                  odds_winner, odds_loser
+           FROM matches WHERE tour=? AND winner_id IS NOT NULL
+           ORDER BY tourney_date, tourney_id, match_num""", (tour,)).fetchall()
+    con.close()
+
+    m = {"book": [], "elo": [], "glicko": []}
+    for date, surface, wid, lid, lvl, ow, ol in rows:
+        if lvl == "D":
+            continue
+        if lvl in TOP_LEVELS and date >= TEST_FROM and ow and ol:
+            p_book = implied_probability(ow, ol)
+            if p_book is not None:
+                m["book"].append(p_book)
+                m["elo"].append(engines["elo"].predict(wid, lid, surface or ""))
+                m["glicko"].append(engines["glicko"].predict(wid, lid, surface or ""))
+        for e in engines.values():
+            e.update(wid, lid, surface or "", date)
+
+    print(f"\n=== {tour}: {len(m['book'])} matches with odds in database ===")
+    _report(m)
+    return True
+
+
+def _report(m: dict) -> None:
+    for name in ("book", "elo", "glicko"):
+        ps = m[name]
+        if not ps:
+            continue
+        acc = sum(p > 0.5 for p in ps) / len(ps)
+        ll = sum(-math.log(min(max(p, 1e-9), 1 - 1e-9)) for p in ps) / len(ps)
+        label = {"book": "bookmakers (de-vigged)",
+                 "elo": "our Elo", "glicko": "our Glicko-2"}[name]
+        print(f"  {label:24} acc {acc:.4f}  logloss {ll:.4f}")
+
+
 def run(tour: str) -> None:
+    if run_from_db(tour):
+        return
+    print(f"\n(no odds in database for {tour}; reading workbooks)")
     preds = our_predictions(tour)
     frames = [pd.read_excel(f) for f in FILES[tour]]
     td = pd.concat(frames, ignore_index=True)
