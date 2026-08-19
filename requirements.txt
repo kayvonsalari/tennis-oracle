@@ -1,0 +1,14 @@
+TEST-LINE-ONE
+TEST-LINE-TW# Runtime
+pandas>=2.0            # odds workbook parsing, data handling
+openpyxl>=3.1          # xlsx reader used by pandas
+
+# A2A protocol (server + client)
+a2a-sdk>=1.1           # protobuf-based v1.x; pre-1.0 docs do not apply
+fastapi>=0.110
+uvicorn>=0.27
+sse-starlette>=2.0     # required by a2a-sdk's compat layer
+
+# The narrator calls the Anthropic API over plain HTTP (stdlib urllib),
+# so no SDK is needed. It is optional: without ANTHROPIC_API_KEY the
+# template renderer runs instead and costs nothing.
